@@ -72,8 +72,8 @@ else:
     }
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    os.getenv("FRONTEND_URL", "http://localhost:3000").strip(),
+    origin.strip()
+    for origin in os.getenv("FRONTEND_URL", "http://localhost:3000").split(",")
 ]
 CORS_ALLOW_CREDENTIALS = True
 
