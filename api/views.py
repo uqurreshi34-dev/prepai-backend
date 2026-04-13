@@ -6,7 +6,9 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
-from .models import User
+from .models import User, PasswordResetToken
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 
 def get_tokens_for_user(user):
@@ -15,6 +17,34 @@ def get_tokens_for_user(user):
         "refresh": str(refresh),
         "access": str(refresh.access_token),
     }
+
+
+def send_reset_email(to_email, reset_url):
+    message = Mail(
+        from_email=os.getenv("FROM_EMAIL"),
+        to_emails=to_email,
+        subject="Reset your PrepAI password",
+        html_content=f"""
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+            <h2 style="color: #059669;">PrepAI</h2>
+            <p>You requested a password reset. Click the button below to choose a new password.</p>
+            <a href="{reset_url}"
+               style="display: inline-block; background: #059669; color: white;
+                      padding: 12px 24px; border-radius: 8px; text-decoration: none;
+                      font-weight: bold; margin: 16px 0;">
+                Reset password
+            </a>
+            <p style="color: #888; font-size: 13px;">
+                This link expires in 1 hour. If you didn't request this, ignore this email.
+            </p>
+        </div>
+        """
+    )
+    try:
+        sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
+        sg.send(message)
+    except Exception as e:
+        print(f"SendGrid error: {e}")
 
 
 @api_view(["POST"])
@@ -124,3 +154,51 @@ def google_auth(request):
         "user": {"id": user.id, "email": user.email, "name": user.first_name, "is_pro": user.is_pro},
         **tokens
     })
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def forgot_password(request):
+    email = request.data.get("email", "").strip().lower()
+    if not email:
+        return Response({"error": "Email is required."}, status=400)
+
+    try:
+        user = User.objects.get(email=email)
+        token = PasswordResetToken.objects.create(user=user)
+        frontend_url = os.getenv(
+            "FRONTEND_URL", "http://localhost:3000").split(",")[0].strip()
+        reset_url = f"{frontend_url}/reset-password?token={token.token}"
+        send_reset_email(user.email, reset_url)
+    except User.DoesNotExist:
+        pass
+
+    return Response({"message": "If that email exists, a reset link has been sent."})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def reset_password(request):
+    token_str = request.data.get("token", "")
+    password = request.data.get("password", "")
+
+    if not token_str or not password:
+        return Response({"error": "Token and password are required."}, status=400)
+
+    if len(password) < 8:
+        return Response({"error": "Password must be at least 8 characters."}, status=400)
+
+    try:
+        token = PasswordResetToken.objects.get(token=token_str)
+    except PasswordResetToken.DoesNotExist:
+        return Response({"error": "Invalid or expired reset link."}, status=400)
+
+    if not token.is_valid():
+        return Response({"error": "This reset link has expired. Please request a new one."}, status=400)
+
+    token.user.set_password(password)
+    token.user.save()
+    token.used = True
+    token.save()
+
+    return Response({"message": "Password reset successfully."})
