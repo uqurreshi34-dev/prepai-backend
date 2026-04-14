@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.utils import timezone
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from google.auth import default
 
 
 class User(AbstractUser):
@@ -60,7 +61,7 @@ class Session(models.Model):
     interview_type = models.CharField(
         max_length=20, choices=INTERVIEW_TYPE_CHOICES)
     experience_level = models.CharField(
-        max_length=20, choices=EXPERIENCE_CHOICES)
+        max_length=20, choices=EXPERIENCE_CHOICES, default="junior", blank=True)
     input_mode = models.CharField(max_length=10, choices=INPUT_MODE_CHOICES)
     question_count = models.IntegerField(default=5)
     overall_score = models.FloatField(null=True, blank=True)
