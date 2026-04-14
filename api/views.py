@@ -13,7 +13,8 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 import anthropic
 
-from .models import User, PasswordResetToken, Session, Question
+from .models import (User, PasswordResetToken, Session,
+                     Question, EmailVerificationToken)
 
 
 def get_tokens_for_user(user):
@@ -52,6 +53,34 @@ def send_reset_email(to_email, reset_url):
         print(f"SendGrid error: {e}")
 
 
+def send_verification_email(to_email, verify_url):
+    message = Mail(
+        from_email=os.getenv("FROM_EMAIL"),
+        to_emails=to_email,
+        subject="Verify your PrepAI email address",
+        html_content=f"""
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+            <h2 style="color: #059669;">PrepAI</h2>
+            <p>Thanks for signing up. Click the button below to verify your email address and activate your account.</p>
+            <a href="{verify_url}"
+               style="display: inline-block; background: #059669; color: white;
+                      padding: 12px 24px; border-radius: 8px; text-decoration: none;
+                      font-weight: bold; margin: 16px 0;">
+                Verify email address
+            </a>
+            <p style="color: #888; font-size: 13px;">
+                This link expires in 24 hours. If you didn't create a PrepAI account, ignore this email.
+            </p>
+        </div>
+        """
+    )
+    try:
+        sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
+        sg.send(message)
+    except Exception as e:
+        print(f"SendGrid error: {e}")
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def register(request):
@@ -70,11 +99,17 @@ def register(request):
         email=email,
         password=password,
         first_name=name,
+        is_email_verified=False,
     )
-    tokens = get_tokens_for_user(user)
+
+    token = EmailVerificationToken.objects.create(user=user)
+    frontend_url = os.getenv(
+        "FRONTEND_URL", "http://localhost:3000").split(",")[0].strip()
+    verify_url = f"{frontend_url}/verify-email?token={token.token}"
+    send_verification_email(user.email, verify_url)
+
     return Response({
-        "user": {"id": user.id, "email": user.email, "name": user.first_name, "is_pro": user.is_pro},
-        **tokens
+        "message": "Account created. Please check your email to verify your account."
     }, status=201)
 
 
@@ -87,6 +122,12 @@ def login(request):
     user = authenticate(request, username=email, password=password)
     if not user:
         return Response({"error": "Invalid email or password."}, status=401)
+
+    if not user.is_email_verified:
+        return Response({
+            "error": "email_not_verified",
+            "message": "Please verify your email before logging in."
+        }, status=403)
 
     tokens = get_tokens_for_user(user)
     return Response({
@@ -147,6 +188,7 @@ def google_auth(request):
             "username": email,
             "first_name": name,
             "google_id": google_id,
+            "is_email_verified": True,
         }
     )
 
@@ -543,3 +585,59 @@ def session_history(request):
         }
         for s in sessions
     ])
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def verify_email(request):
+    token_str = request.data.get("token", "")
+    if not token_str:
+        return Response({"error": "Token is required."}, status=400)
+
+    try:
+        token = EmailVerificationToken.objects.get(token=token_str)
+    except EmailVerificationToken.DoesNotExist:
+        return Response({"error": "Invalid or expired verification link."}, status=400)
+
+    if not token.is_valid():
+        return Response({"error": "This verification link has expired. Please request a new one."}, status=400)
+
+    token.user.is_email_verified = True
+    token.user.save()
+    token.used = True
+    token.save()
+
+    tokens = get_tokens_for_user(token.user)
+    return Response({
+        "message": "Email verified successfully.",
+        "user": {
+            "id": token.user.id,
+            "email": token.user.email,
+            "name": token.user.first_name,
+            "is_pro": token.user.is_pro
+        },
+        **tokens
+    })
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def resend_verification(request):
+    email = request.data.get("email", "").strip().lower()
+    if not email:
+        return Response({"error": "Email is required."}, status=400)
+
+    try:
+        user = User.objects.get(email=email)
+        if user.is_email_verified:
+            return Response({"message": "This email is already verified."})
+
+        token = EmailVerificationToken.objects.create(user=user)
+        frontend_url = os.getenv(
+            "FRONTEND_URL", "http://localhost:3000").split(",")[0].strip()
+        verify_url = f"{frontend_url}/verify-email?token={token.token}"
+        send_verification_email(user.email, verify_url)
+    except User.DoesNotExist:
+        pass
+
+    return Response({"message": "If that account exists and is unverified, a new link has been sent."})

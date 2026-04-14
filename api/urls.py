@@ -17,4 +17,6 @@ urlpatterns = [
     path("dashboard/stats/", views.dashboard_stats),
     path("auth/profile/", views.update_profile),
     path("sessions/history/", views.session_history),
+    path("auth/verify-email/", views.verify_email),
+    path("auth/resend-verification/", views.resend_verification),
 ]
