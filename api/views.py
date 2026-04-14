@@ -6,9 +6,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
-from .models import User, PasswordResetToken
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
+from .models import User, PasswordResetToken, Session, Question
+import anthropic
+import json
 
 
 def get_tokens_for_user(user):
@@ -202,3 +204,98 @@ def reset_password(request):
     token.save()
 
     return Response({"message": "Password reset successfully."})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_session(request):
+    user = request.user
+    role = request.data.get("role")
+    interview_type = request.data.get("interview_type")
+    experience_level = request.data.get("experience_level")
+    input_mode = request.data.get("input_mode", "text")
+    question_count = int(request.data.get("question_count", 5))
+
+    if not all([role, interview_type, experience_level]):
+        return Response({"error": "Role, interview type and experience level are required."}, status=400)
+
+    role_display = dict(Session.ROLE_CHOICES).get(role, role)
+
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=1024,
+            messages=[{
+                "role": "user",
+                "content": f"""Generate {question_count} realistic {interview_type} interview questions 
+                for a {experience_level} {role_display} candidate. 
+                Return ONLY a JSON array of strings. No preamble, no markdown, no explanation.
+                Example: ["Question 1?", "Question 2?"]"""
+            }]
+        )
+
+        raw = message.content[0].text.strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        questions_list = json.loads(raw)
+
+    except Exception as e:
+        return Response({"error": f"Failed to generate questions: {str(e)}"}, status=500)
+
+    session = Session.objects.create(
+        user=user,
+        role=role,
+        interview_type=interview_type,
+        experience_level=experience_level,
+        input_mode=input_mode,
+        question_count=question_count,
+    )
+
+    questions = []
+    for i, q_text in enumerate(questions_list):
+        q = Question.objects.create(
+            session=session,
+            question_number=i + 1,
+            question_text=q_text,
+        )
+        questions.append(
+            {"id": q.id, "question_number": q.question_number, "question_text": q.question_text})
+
+    return Response({
+        "session_id": session.id,
+        "questions": questions,
+        "input_mode": session.input_mode,
+    }, status=201)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_session(request, session_id):
+    try:
+        session = Session.objects.get(id=session_id, user=request.user)
+    except Session.DoesNotExist:
+        return Response({"error": "Session not found."}, status=404)
+
+    questions = session.questions.all()
+    return Response({
+        "session_id": session.id,
+        "role": session.role,
+        "interview_type": session.interview_type,
+        "experience_level": session.experience_level,
+        "input_mode": session.input_mode,
+        "question_count": session.question_count,
+        "questions": [
+            {
+                "id": q.id,
+                "question_number": q.question_number,
+                "question_text": q.question_text,
+                "answer_text": q.answer_text,
+                "clarity_score": q.clarity_score,
+                "relevance_score": q.relevance_score,
+                "depth_score": q.depth_score,
+                "feedback_tip": q.feedback_tip,
+            }
+            for q in questions
+        ],
+    })
