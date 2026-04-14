@@ -16,4 +16,5 @@ urlpatterns = [
     path("sessions/<int:session_id>/complete/", views.complete_session),
     path("dashboard/stats/", views.dashboard_stats),
     path("auth/profile/", views.update_profile),
+    path("sessions/history/", views.session_history),
 ]

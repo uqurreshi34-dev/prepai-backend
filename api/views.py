@@ -508,3 +508,24 @@ def update_profile(request):
         "target_role": user.target_role,
         "is_pro": user.is_pro,
     })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def session_history(request):
+    sessions = Session.objects.filter(
+        user=request.user
+    ).order_by("-created_at")[:20]
+
+    return Response([
+        {
+            "id": s.id,
+            "role": dict(Session.ROLE_CHOICES).get(s.role, s.role),
+            "interview_type": s.interview_type,
+            "question_count": s.question_count,
+            "overall_score": s.overall_score,
+            "completed": s.completed_at is not None,
+            "created_at": s.created_at.strftime("%d %b %Y"),
+        }
+        for s in sessions
+    ])
