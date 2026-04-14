@@ -486,3 +486,25 @@ def dashboard_stats(request):
         "last_role": last_role,
         "streak": streak,
     })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def update_profile(request):
+    user = request.user
+    target_role = request.data.get("target_role", "").strip()
+
+    valid_roles = [r[0] for r in Session.ROLE_CHOICES]
+    if target_role and target_role not in valid_roles:
+        return Response({"error": "Invalid role."}, status=400)
+
+    user.target_role = target_role
+    user.save()
+
+    return Response({
+        "id": user.id,
+        "email": user.email,
+        "name": user.first_name,
+        "target_role": user.target_role,
+        "is_pro": user.is_pro,
+    })
