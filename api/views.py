@@ -221,6 +221,20 @@ def create_session(request):
     if not all([role, interview_type]):
         return Response({"error": "Role and interview type are required."}, status=400)
 
+    now = timezone.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    if not user.is_pro:
+        sessions_this_month = Session.objects.filter(
+            user=user,
+            created_at__gte=month_start
+        ).count()
+        if sessions_this_month >= 3:
+            return Response({
+                "error": "free_tier_limit",
+                "message": "You have used all 3 free sessions this month. Upgrade to Pro for unlimited sessions."
+            }, status=403)
+
     role_display = dict(Session.ROLE_CHOICES).get(role, role)
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
