@@ -288,6 +288,7 @@ def get_session(request, session_id):
         "experience_level": session.experience_level,
         "input_mode": session.input_mode,
         "question_count": session.question_count,
+        "overall_score": session.overall_score,
         "questions": [
             {
                 "id": q.id,
