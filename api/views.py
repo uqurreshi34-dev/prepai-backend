@@ -212,12 +212,11 @@ def create_session(request):
     user = request.user
     role = request.data.get("role")
     interview_type = request.data.get("interview_type")
-    experience_level = request.data.get("experience_level")
     input_mode = request.data.get("input_mode", "text")
     question_count = int(request.data.get("question_count", 5))
 
-    if not all([role, interview_type, experience_level]):
-        return Response({"error": "Role, interview type and experience level are required."}, status=400)
+    if not all([role, interview_type]):
+        return Response({"error": "Role and interview type are required."}, status=400)
 
     role_display = dict(Session.ROLE_CHOICES).get(role, role)
 
@@ -230,7 +229,7 @@ def create_session(request):
             messages=[{
                 "role": "user",
                 "content": f"""Generate {question_count} realistic {interview_type} interview questions 
-                for a {experience_level} {role_display} candidate. 
+                for a {role_display} candidate. 
                 Return ONLY a JSON array of strings. No preamble, no markdown, no explanation.
                 Example: ["Question 1?", "Question 2?"]"""
             }]
@@ -247,7 +246,7 @@ def create_session(request):
         user=user,
         role=role,
         interview_type=interview_type,
-        experience_level=experience_level,
+        experience_level="junior",
         input_mode=input_mode,
         question_count=question_count,
     )
@@ -259,8 +258,11 @@ def create_session(request):
             question_number=i + 1,
             question_text=q_text,
         )
-        questions.append(
-            {"id": q.id, "question_number": q.question_number, "question_text": q.question_text})
+        questions.append({
+            "id": q.id,
+            "question_number": q.question_number,
+            "question_text": q.question_text
+        })
 
     return Response({
         "session_id": session.id,
