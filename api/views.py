@@ -6,11 +6,12 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
+from django.utils import timezone
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
-from .models import User, PasswordResetToken, Session, Question
 import anthropic
 import json
+from .models import User, PasswordResetToken, Session, Question
 
 
 def get_tokens_for_user(user):
@@ -300,4 +301,132 @@ def get_session(request, session_id):
             }
             for q in questions
         ],
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def evaluate_answer(request, session_id, question_id):
+    try:
+        session = Session.objects.get(id=session_id, user=request.user)
+        question = Question.objects.get(id=question_id, session=session)
+    except (Session.DoesNotExist, Question.DoesNotExist):
+        return Response({"error": "Not found."}, status=404)
+
+    answer_text = request.data.get("answer_text", "").strip()
+    if not answer_text:
+        return Response({"error": "Answer is required."}, status=400)
+
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=512,
+            messages=[{
+                "role": "user",
+                "content": f"""You are a strict but fair interview coach. Evaluate this interview answer.
+Return ONLY valid JSON, no other text, no markdown:
+{{
+  "clarity": 7,
+  "relevance": 8,
+  "depth": 6,
+  "tip": "one specific actionable improvement in max 2 sentences"
+}}
+
+Question: {question.question_text}
+Answer: {answer_text}"""
+            }]
+        )
+
+        raw = message.content[0].text.strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        feedback = json.loads(raw)
+
+    except Exception as e:
+        return Response({"error": f"Failed to evaluate answer: {str(e)}"}, status=500)
+
+    question.answer_text = answer_text
+    question.clarity_score = feedback.get("clarity")
+    question.relevance_score = feedback.get("relevance")
+    question.depth_score = feedback.get("depth")
+    question.feedback_tip = feedback.get("tip", "")
+    question.save()
+
+    return Response({
+        "clarity": question.clarity_score,
+        "relevance": question.relevance_score,
+        "depth": question.depth_score,
+        "tip": question.feedback_tip,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def complete_session(request, session_id):
+    try:
+        session = Session.objects.get(id=session_id, user=request.user)
+    except Session.DoesNotExist:
+        return Response({"error": "Session not found."}, status=404)
+
+    questions = session.questions.filter(clarity_score__isnull=False)
+    if not questions.exists():
+        return Response({"error": "No answered questions found."}, status=400)
+
+    all_scores = []
+    session_data = []
+    for q in questions:
+        avg = (q.clarity_score + q.relevance_score + q.depth_score) / 3
+        all_scores.append(avg)
+        session_data.append({
+            "question": q.question_text,
+            "answer": q.answer_text,
+            "clarity": q.clarity_score,
+            "relevance": q.relevance_score,
+            "depth": q.depth_score,
+        })
+
+    overall_score = round(sum(all_scores) / len(all_scores), 1)
+
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=1024,
+            messages=[{
+                "role": "user",
+                "content": f"""You are an interview coach reviewing a completed practice session.
+Return ONLY valid JSON, no other text, no markdown:
+{{
+  "strengths": ["specific strength 1", "specific strength 2", "specific strength 3"],
+  "weaknesses": ["specific weakness 1", "specific weakness 2", "specific weakness 3"],
+  "practice_questions": ["follow up question 1", "follow up question 2", "follow up question 3"]
+}}
+
+Session data: {json.dumps(session_data)}"""
+            }]
+        )
+
+        raw = message.content[0].text.strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        summary = json.loads(raw)
+
+    except Exception:
+        summary = {
+            "strengths": [],
+            "weaknesses": [],
+            "practice_questions": []
+        }
+
+    session.overall_score = overall_score
+    session.completed_at = timezone.now()
+    session.save()
+
+    return Response({
+        "overall_score": overall_score,
+        "strengths": summary.get("strengths", []),
+        "weaknesses": summary.get("weaknesses", []),
+        "practice_questions": summary.get("practice_questions", []),
+        "questions": session_data,
     })

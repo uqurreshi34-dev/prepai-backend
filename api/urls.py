@@ -11,4 +11,7 @@ urlpatterns = [
     path("auth/reset-password/", views.reset_password),
     path("sessions/create/", views.create_session),
     path("sessions/<int:session_id>/", views.get_session),
+    path("sessions/<int:session_id>/questions/<int:question_id>/evaluate/",
+         views.evaluate_answer),
+    path("sessions/<int:session_id>/complete/", views.complete_session),
 ]
