@@ -1,4 +1,6 @@
 import os
+import json
+from datetime import timedelta
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from rest_framework.decorators import api_view, permission_classes
@@ -10,7 +12,7 @@ from django.utils import timezone
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 import anthropic
-import json
+
 from .models import User, PasswordResetToken, Session, Question
 
 
@@ -430,4 +432,57 @@ Session data: {json.dumps(session_data)}"""
         "weaknesses": summary.get("weaknesses", []),
         "practice_questions": summary.get("practice_questions", []),
         "questions": session_data,
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def dashboard_stats(request):
+    user = request.user
+    now = timezone.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    sessions_this_month = Session.objects.filter(
+        user=user,
+        created_at__gte=month_start
+    ).count()
+
+    completed_sessions = Session.objects.filter(
+        user=user,
+        overall_score__isnull=False
+    ).order_by("-completed_at")
+
+    average_score = None
+    if completed_sessions.exists():
+        scores = [s.overall_score for s in completed_sessions]
+        average_score = round(sum(scores) / len(scores), 1)
+
+    last_score = None
+    last_role = None
+    if completed_sessions.exists():
+        last = completed_sessions.first()
+        last_score = last.overall_score
+        last_role = dict(Session.ROLE_CHOICES).get(last.role, last.role)
+
+    streak = 0
+    check_date = now.date()
+    while True:
+        day_sessions = Session.objects.filter(
+            user=user,
+            overall_score__isnull=False,
+            completed_at__date=check_date
+        ).exists()
+        if day_sessions:
+            streak += 1
+            check_date -= timedelta(days=1)
+        else:
+            break
+
+    return Response({
+        "sessions_this_month": sessions_this_month,
+        "sessions_remaining": max(0, 3 - sessions_this_month),
+        "average_score": average_score,
+        "last_score": last_score,
+        "last_role": last_role,
+        "streak": streak,
     })

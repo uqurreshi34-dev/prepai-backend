@@ -14,4 +14,5 @@ urlpatterns = [
     path("sessions/<int:session_id>/questions/<int:question_id>/evaluate/",
          views.evaluate_answer),
     path("sessions/<int:session_id>/complete/", views.complete_session),
+    path("dashboard/stats/", views.dashboard_stats),
 ]
