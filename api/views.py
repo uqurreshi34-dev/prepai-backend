@@ -658,7 +658,9 @@ def admin_stats(request):
 
     users = User.objects.filter(is_superuser=False).order_by("-created_at")
     total_sessions = Session.objects.count()
-    verified_count = User.objects.filter(is_email_verified=True).count()
+    verified_count = User.objects.filter(
+        is_email_verified=True, is_superuser=False).count()
+    waitlist_count = WaitlistEntry.objects.count()
 
     completed_sessions = Session.objects.filter(overall_score__isnull=False)
     avg_score = None
@@ -687,11 +689,19 @@ def admin_stats(request):
             "google": bool(user.google_id),
         })
 
+    waitlist = WaitlistEntry.objects.order_by("-created_at")
+    waitlist_data = [
+        {"email": w.email, "joined": w.created_at.strftime("%d %b %Y")}
+        for w in waitlist
+    ]
+
     return Response({
         "total_users": users.count(),
         "total_sessions": total_sessions,
         "verified_emails": verified_count,
         "avg_score": avg_score,
+        "waitlist_count": waitlist_count,
+        "waitlist": waitlist_data,
         "users": user_data,
     })
 
