@@ -14,7 +14,8 @@ from sendgrid.helpers.mail import Mail
 import anthropic
 
 from .models import (User, PasswordResetToken, Session,
-                     Question, EmailVerificationToken)
+                     Question, EmailVerificationToken,
+                     WaitlistEntry)
 
 
 def get_tokens_for_user(user):
@@ -693,3 +694,17 @@ def admin_stats(request):
         "avg_score": avg_score,
         "users": user_data,
     })
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def join_waitlist(request):
+    email = request.data.get("email", "").strip().lower()
+    if not email:
+        return Response({"error": "Email is required."}, status=400)
+
+    if WaitlistEntry.objects.filter(email=email).exists():
+        return Response({"message": "You're already on the waitlist!"})
+
+    WaitlistEntry.objects.create(email=email)
+    return Response({"message": "You're on the list! We'll be in touch soon."}, status=201)

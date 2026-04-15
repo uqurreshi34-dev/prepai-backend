@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, PasswordResetToken, Session, Question, EmailVerificationToken
+from .models import (User, PasswordResetToken, Session, Question,
+                     EmailVerificationToken, WaitlistEntry)
 
 
 @admin.register(User)
@@ -15,3 +16,4 @@ admin.site.register(PasswordResetToken)
 admin.site.register(Session)
 admin.site.register(Question)
 admin.site.register(EmailVerificationToken)
+admin.site.register(WaitlistEntry)
