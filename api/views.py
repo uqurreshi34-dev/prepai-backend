@@ -641,3 +641,50 @@ def resend_verification(request):
         pass
 
     return Response({"message": "If that account exists and is unverified, a new link has been sent."})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def admin_stats(request):
+    secret = request.GET.get("secret", "")
+    if secret != os.getenv("ADMIN_SECRET", ""):
+        return Response({"error": "Forbidden"}, status=403)
+
+    users = User.objects.all().order_by("-created_at")
+    total_sessions = Session.objects.count()
+    verified_count = User.objects.filter(is_email_verified=True).count()
+
+    completed_sessions = Session.objects.filter(overall_score__isnull=False)
+    avg_score = None
+    if completed_sessions.exists():
+        scores = [s.overall_score for s in completed_sessions]
+        avg_score = round(sum(scores) / len(scores), 1)
+
+    user_data = []
+    for user in users:
+        user_sessions = Session.objects.filter(user=user)
+        completed = user_sessions.filter(overall_score__isnull=False)
+        user_avg = None
+        if completed.exists():
+            s = [c.overall_score for c in completed]
+            user_avg = round(sum(s) / len(s), 1)
+
+        user_data.append({
+            "id": user.id,
+            "name": user.get_full_name() or user.first_name or "—",
+            "email": user.email,
+            "joined": user.created_at.strftime("%d %b %Y"),
+            "sessions": user_sessions.count(),
+            "avg_score": user_avg,
+            "is_email_verified": user.is_email_verified,
+            "is_pro": user.is_pro,
+            "google": bool(user.google_id),
+        })
+
+    return Response({
+        "total_users": users.count(),
+        "total_sessions": total_sessions,
+        "verified_emails": verified_count,
+        "avg_score": avg_score,
+        "users": user_data,
+    })

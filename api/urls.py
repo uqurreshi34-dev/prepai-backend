@@ -19,4 +19,5 @@ urlpatterns = [
     path("sessions/history/", views.session_history),
     path("auth/verify-email/", views.verify_email),
     path("auth/resend-verification/", views.resend_verification),
+    path("admin-stats/", views.admin_stats),
 ]
