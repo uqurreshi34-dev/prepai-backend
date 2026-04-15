@@ -88,6 +88,10 @@ def register(request):
     password = request.data.get("password", "")
     name = request.data.get("name", "").strip()
 
+    name_parts = name.split(" ", 1)
+    first_name = name_parts[0]
+    last_name = name_parts[1] if len(name_parts) > 1 else ""
+
     if not email or not password or not name:
         return Response({"error": "Name, email and password are required."}, status=400)
 
@@ -98,7 +102,8 @@ def register(request):
         username=email,
         email=email,
         password=password,
-        first_name=name,
+        first_name=first_name,
+        last_name=last_name,
         is_email_verified=False,
     )
 
@@ -650,7 +655,7 @@ def admin_stats(request):
     if secret != os.getenv("ADMIN_SECRET", ""):
         return Response({"error": "Forbidden"}, status=403)
 
-    users = User.objects.all().order_by("-created_at")
+    users = User.objects.filter(is_superuser=False).order_by("-created_at")
     total_sessions = Session.objects.count()
     verified_count = User.objects.filter(is_email_verified=True).count()
 
