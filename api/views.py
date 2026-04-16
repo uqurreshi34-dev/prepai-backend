@@ -30,10 +30,10 @@ def send_reset_email(to_email, reset_url):
     message = Mail(
         from_email=os.getenv("FROM_EMAIL"),
         to_emails=to_email,
-        subject="Reset your PrepAI password",
+        subject="Reset your RehearsAI password",
         html_content=f"""
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
-            <h2 style="color: #059669;">PrepAI</h2>
+            <h2 style="color: #059669;">RehearsAI</h2>
             <p>You requested a password reset. Click the button below to choose a new password.</p>
             <a href="{reset_url}"
                style="display: inline-block; background: #059669; color: white;
@@ -58,10 +58,10 @@ def send_verification_email(to_email, verify_url):
     message = Mail(
         from_email=os.getenv("FROM_EMAIL"),
         to_emails=to_email,
-        subject="Verify your PrepAI email address",
+        subject="Verify your RehearsAI email address",
         html_content=f"""
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
-            <h2 style="color: #059669;">PrepAI</h2>
+            <h2 style="color: #059669;">RehearsAI</h2>
             <p>Thanks for signing up. Click the button below to verify your email address and activate your account.</p>
             <a href="{verify_url}"
                style="display: inline-block; background: #059669; color: white;
@@ -70,7 +70,7 @@ def send_verification_email(to_email, verify_url):
                 Verify email address
             </a>
             <p style="color: #888; font-size: 13px;">
-                This link expires in 24 hours. If you didn't create a PrepAI account, ignore this email.
+                This link expires in 24 hours. If you didn't create a RehearsAI account, ignore this email.
             </p>
         </div>
         """
@@ -249,8 +249,9 @@ def reset_password(request):
     if not token.is_valid():
         return Response({"error": "This reset link has expired. Please request a new one."}, status=400)
 
-    token.user.set_password(password)
-    token.user.save()
+    user = token.user
+    user.set_password(password)
+    user.save()
     token.used = True
     token.save()
 
@@ -258,82 +259,62 @@ def reset_password(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def create_session(request):
-    user = request.user
-    role = request.data.get("role")
-    interview_type = request.data.get("interview_type")
-    input_mode = request.data.get("input_mode", "text")
-    question_count = int(request.data.get("question_count", 5))
-
-    if not all([role, interview_type]):
-        return Response({"error": "Role and interview type are required."}, status=400)
+    user = request.user if request.user.is_authenticated else None
+    if not user:
+        return Response({"error": "Authentication required."}, status=401)
 
     now = timezone.now()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    sessions_this_month = Session.objects.filter(
+        user=user, created_at__gte=month_start).count()
 
-    if not user.is_pro:
-        sessions_this_month = Session.objects.filter(
-            user=user,
-            created_at__gte=month_start
-        ).count()
-        if sessions_this_month >= 3:
-            return Response({
-                "error": "free_tier_limit",
-                "message": "You have used all 3 free sessions this month. Upgrade to Pro for unlimited sessions."
-            }, status=403)
+    if not user.is_pro and sessions_this_month >= 3:
+        return Response({"error": "free_tier_limit"}, status=403)
 
-    role_display = dict(Session.ROLE_CHOICES).get(role, role)
+    role = request.data.get("role", "general")
+    interview_type = request.data.get("interview_type", "behavioural")
+    question_count = int(request.data.get("question_count", 5))
+    input_mode = request.data.get("input_mode", "text")
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    role_label = dict(Session.ROLE_CHOICES).get(role, role)
+
+    prompt = f"""Generate {question_count} {interview_type} interview questions for a {role_label} role.
+
+Return ONLY a JSON array of strings, no other text. Example:
+["Question 1?", "Question 2?", "Question 3?"]"""
 
     try:
         message = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=1024,
-            messages=[{
-                "role": "user",
-                "content": f"""Generate {question_count} realistic {interview_type} interview questions 
-                for a {role_display} candidate. 
-                Return ONLY a JSON array of strings. No preamble, no markdown, no explanation.
-                Example: ["Question 1?", "Question 2?"]"""
-            }]
+            messages=[{"role": "user", "content": prompt}]
         )
-
-        raw = message.content[0].text.strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        questions_list = json.loads(raw)
-
-    except Exception as e:
-        return Response({"error": f"Failed to generate questions: {str(e)}"}, status=500)
+        content = message.content[0].text.strip()
+        questions = json.loads(content)
+    except Exception:
+        questions = [f"Tell me about your experience as a {role_label}." for _ in range(
+            question_count)]
 
     session = Session.objects.create(
         user=user,
         role=role,
         interview_type=interview_type,
-        experience_level="junior",
-        input_mode=input_mode,
         question_count=question_count,
+        input_mode=input_mode,
     )
 
-    questions = []
-    for i, q_text in enumerate(questions_list):
-        q = Question.objects.create(
+    for i, q_text in enumerate(questions[:question_count], 1):
+        Question.objects.create(
             session=session,
-            question_number=i + 1,
+            question_number=i,
             question_text=q_text,
         )
-        questions.append({
-            "id": q.id,
-            "question_number": q.question_number,
-            "question_text": q.question_text
-        })
 
-    return Response({
-        "session_id": session.id,
-        "questions": questions,
-        "input_mode": session.input_mode,
-    }, status=201)
+    return Response({"session_id": session.id})
 
 
 @api_view(["GET"])
@@ -344,28 +325,27 @@ def get_session(request, session_id):
     except Session.DoesNotExist:
         return Response({"error": "Session not found."}, status=404)
 
-    questions = session.questions.all()
+    questions = Question.objects.filter(
+        session=session).order_by("question_number")
+
     return Response({
-        "session_id": session.id,
+        "id": session.id,
         "role": session.role,
         "interview_type": session.interview_type,
-        "experience_level": session.experience_level,
-        "input_mode": session.input_mode,
         "question_count": session.question_count,
-        "overall_score": session.overall_score,
+        "input_mode": session.input_mode,
         "questions": [
             {
                 "id": q.id,
                 "question_number": q.question_number,
                 "question_text": q.question_text,
                 "answer_text": q.answer_text,
-                "clarity_score": q.clarity_score,
-                "relevance_score": q.relevance_score,
-                "depth_score": q.depth_score,
-                "feedback_tip": q.feedback_tip,
+                "score": q.score,
+                "feedback": q.feedback,
+                "tip": q.tip,
             }
             for q in questions
-        ],
+        ]
     })
 
 
@@ -378,51 +358,55 @@ def evaluate_answer(request, session_id, question_id):
     except (Session.DoesNotExist, Question.DoesNotExist):
         return Response({"error": "Not found."}, status=404)
 
-    answer_text = request.data.get("answer_text", "").strip()
-    if not answer_text:
+    answer = request.data.get("answer", "").strip()
+    if not answer:
         return Response({"error": "Answer is required."}, status=400)
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    role_label = dict(Session.ROLE_CHOICES).get(session.role, session.role)
+
+    prompt = f"""You are an expert interview coach evaluating a candidate's answer.
+
+Role: {role_label}
+Interview type: {session.interview_type}
+Question: {question.question_text}
+Answer: {answer}
+
+Evaluate this answer and return ONLY a JSON object with this exact structure:
+{{
+    "score": <integer 1-10>,
+    "feedback": "<2-3 sentence evaluation of the answer>",
+    "tip": "<one specific, actionable improvement tip>"
+}}"""
 
     try:
         message = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=512,
-            messages=[{
-                "role": "user",
-                "content": f"""You are a strict but fair interview coach. Evaluate this interview answer.
-Return ONLY valid JSON, no other text, no markdown:
-{{
-  "clarity": 7,
-  "relevance": 8,
-  "depth": 6,
-  "tip": "one specific actionable improvement in max 2 sentences"
-}}
-
-Question: {question.question_text}
-Answer: {answer_text}"""
-            }]
+            messages=[{"role": "user", "content": prompt}]
         )
+        content = message.content[0].text.strip()
+        result = json.loads(content)
+        score = int(result.get("score", 5))
+        feedback = result.get("feedback", "Good attempt.")
+        tip = result.get(
+            "tip", "Practice structuring your answers using the STAR method.")
+    except Exception:
+        score = 5
+        feedback = "Your answer was received."
+        tip = "Try to use the STAR method: Situation, Task, Action, Result."
 
-        raw = message.content[0].text.strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        feedback = json.loads(raw)
-
-    except Exception as e:
-        return Response({"error": f"Failed to evaluate answer: {str(e)}"}, status=500)
-
-    question.answer_text = answer_text
-    question.clarity_score = feedback.get("clarity")
-    question.relevance_score = feedback.get("relevance")
-    question.depth_score = feedback.get("depth")
-    question.feedback_tip = feedback.get("tip", "")
+    question.answer_text = answer
+    question.score = score
+    question.feedback = feedback
+    question.tip = tip
     question.save()
 
     return Response({
-        "clarity": question.clarity_score,
-        "relevance": question.relevance_score,
-        "depth": question.depth_score,
-        "tip": question.feedback_tip,
+        "score": score,
+        "feedback": feedback,
+        "tip": tip,
     })
 
 
@@ -434,49 +418,50 @@ def complete_session(request, session_id):
     except Session.DoesNotExist:
         return Response({"error": "Session not found."}, status=404)
 
-    questions = session.questions.filter(clarity_score__isnull=False)
+    questions = Question.objects.filter(
+        session=session, score__isnull=False).order_by("question_number")
+
     if not questions.exists():
         return Response({"error": "No answered questions found."}, status=400)
 
-    all_scores = []
-    session_data = []
-    for q in questions:
-        avg = (q.clarity_score + q.relevance_score + q.depth_score) / 3
-        all_scores.append(avg)
-        session_data.append({
+    scores = [q.score for q in questions]
+    overall_score = round(sum(scores) / len(scores), 1)
+
+    session_data = [
+        {
             "question": q.question_text,
             "answer": q.answer_text,
-            "clarity": q.clarity_score,
-            "relevance": q.relevance_score,
-            "depth": q.depth_score,
-        })
-
-    overall_score = round(sum(all_scores) / len(all_scores), 1)
+            "score": q.score,
+            "feedback": q.feedback,
+            "tip": q.tip,
+        }
+        for q in questions
+    ]
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    role_label = dict(Session.ROLE_CHOICES).get(session.role, session.role)
+
+    prompt = f"""You are an expert interview coach. Here is a complete interview session for a {role_label} role:
+
+{json.dumps(session_data, indent=2)}
+
+Overall score: {overall_score}/10
+
+Provide a summary returning ONLY a JSON object with this exact structure:
+{{
+    "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
+    "weaknesses": ["<weakness 1>", "<weakness 2>"],
+    "practice_questions": ["<practice question 1>", "<practice question 2>", "<practice question 3>"]
+}}"""
 
     try:
         message = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=1024,
-            messages=[{
-                "role": "user",
-                "content": f"""You are an interview coach reviewing a completed practice session.
-Return ONLY valid JSON, no other text, no markdown:
-{{
-  "strengths": ["specific strength 1", "specific strength 2", "specific strength 3"],
-  "weaknesses": ["specific weakness 1", "specific weakness 2", "specific weakness 3"],
-  "practice_questions": ["follow up question 1", "follow up question 2", "follow up question 3"]
-}}
-
-Session data: {json.dumps(session_data)}"""
-            }]
+            messages=[{"role": "user", "content": prompt}]
         )
-
-        raw = message.content[0].text.strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        summary = json.loads(raw)
-
+        content = message.content[0].text.strip()
+        summary = json.loads(content)
     except Exception:
         summary = {
             "strengths": [],
