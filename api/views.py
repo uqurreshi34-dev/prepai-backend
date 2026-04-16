@@ -325,28 +325,33 @@ def get_session(request, session_id):
     except Session.DoesNotExist:
         return Response({"error": "Session not found."}, status=404)
 
-    questions = Question.objects.filter(
-        session=session).order_by("question_number")
+    try:
+        questions = Question.objects.filter(
+            session=session).order_by("question_number")
 
-    return Response({
-        "id": session.id,
-        "role": session.role,
-        "interview_type": session.interview_type,
-        "question_count": session.question_count,
-        "input_mode": session.input_mode,
-        "questions": [
-            {
-                "id": q.id,
-                "question_number": q.question_number,
-                "question_text": q.question_text,
-                "answer_text": q.answer_text,
-                "score": q.score,
-                "feedback": q.feedback,
-                "tip": q.tip,
-            }
-            for q in questions
-        ]
-    })
+        return Response({
+            "id": session.id,
+            "role": session.role,
+            "interview_type": session.interview_type,
+            "question_count": session.question_count,
+            "input_mode": session.input_mode,
+            "questions": [
+                {
+                    "id": q.id,
+                    "question_number": q.question_number,
+                    "question_text": q.question_text,
+                    "answer_text": q.answer_text,
+                    "score": q.score,
+                    "feedback": q.feedback,
+                    "tip": q.tip,
+                }
+                for q in questions
+            ]
+        })
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return Response({"error": str(e)}, status=500)
 
 
 @api_view(["POST"])
