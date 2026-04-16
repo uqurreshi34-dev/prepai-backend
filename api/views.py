@@ -279,7 +279,6 @@ def create_session(request):
     input_mode = request.data.get("input_mode", "text")
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
     role_label = dict(Session.ROLE_CHOICES).get(role, role)
 
     prompt = f"""Generate {question_count} {interview_type} interview questions for a {role_label} role.
@@ -294,10 +293,10 @@ Return ONLY a JSON array of strings, no other text. Example:
             messages=[{"role": "user", "content": prompt}]
         )
         content = message.content[0].text.strip()
-        questions = json.loads(content)
+        question_list = json.loads(content)
     except Exception:
-        questions = [f"Tell me about your experience as a {role_label}." for _ in range(
-            question_count)]
+        question_list = [
+            f"Tell me about your experience as a {role_label}." for _ in range(question_count)]
 
     session = Session.objects.create(
         user=user,
@@ -307,7 +306,7 @@ Return ONLY a JSON array of strings, no other text. Example:
         input_mode=input_mode,
     )
 
-    for i, q_text in enumerate(questions[:question_count], 1):
+    for i, q_text in enumerate(question_list[:question_count], 1):
         Question.objects.create(
             session=session,
             question_number=i,
@@ -325,33 +324,28 @@ def get_session(request, session_id):
     except Session.DoesNotExist:
         return Response({"error": "Session not found."}, status=404)
 
-    try:
-        questions = Question.objects.filter(
-            session=session).order_by("question_number")
+    questions = Question.objects.filter(
+        session=session).order_by("question_number")
 
-        return Response({
-            "id": session.id,
-            "role": session.role,
-            "interview_type": session.interview_type,
-            "question_count": session.question_count,
-            "input_mode": session.input_mode,
-            "questions": [
-                {
-                    "id": q.id,
-                    "question_number": q.question_number,
-                    "question_text": q.question_text,
-                    "answer_text": q.answer_text,
-                    "score": q.score,
-                    "feedback": q.feedback,
-                    "tip": q.tip,
-                }
-                for q in questions
-            ]
-        })
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return Response({"error": str(e)}, status=500)
+    return Response({
+        "id": session.id,
+        "role": session.role,
+        "interview_type": session.interview_type,
+        "question_count": session.question_count,
+        "input_mode": session.input_mode,
+        "questions": [
+            {
+                "id": q.id,
+                "question_number": q.question_number,
+                "question_text": q.question_text,
+                "answer_text": q.answer_text,
+                "score": round((q.clarity_score + q.relevance_score + q.depth_score) / 3, 1) if q.clarity_score is not None else None,
+                "feedback": q.feedback_tip,
+                "tip": None,
+            }
+            for q in questions
+        ]
+    })
 
 
 @api_view(["POST"])
@@ -368,7 +362,6 @@ def evaluate_answer(request, session_id, question_id):
         return Response({"error": "Answer is required."}, status=400)
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
     role_label = dict(Session.ROLE_CHOICES).get(session.role, session.role)
 
     prompt = f"""You are an expert interview coach evaluating a candidate's answer.
@@ -380,9 +373,10 @@ Answer: {answer}
 
 Evaluate this answer and return ONLY a JSON object with this exact structure:
 {{
-    "score": <integer 1-10>,
-    "feedback": "<2-3 sentence evaluation of the answer>",
-    "tip": "<one specific, actionable improvement tip>"
+    "clarity_score": <integer 1-10>,
+    "relevance_score": <integer 1-10>,
+    "depth_score": <integer 1-10>,
+    "feedback_tip": "<2-3 sentence evaluation followed by one specific improvement tip>"
 }}"""
 
     try:
@@ -393,25 +387,28 @@ Evaluate this answer and return ONLY a JSON object with this exact structure:
         )
         content = message.content[0].text.strip()
         result = json.loads(content)
-        score = int(result.get("score", 5))
-        feedback = result.get("feedback", "Good attempt.")
-        tip = result.get(
-            "tip", "Practice structuring your answers using the STAR method.")
+        clarity = int(result.get("clarity_score", 5))
+        relevance = int(result.get("relevance_score", 5))
+        depth = int(result.get("depth_score", 5))
+        feedback_tip = result.get(
+            "feedback_tip", "Good attempt. Try to use the STAR method.")
     except Exception:
-        score = 5
-        feedback = "Your answer was received."
-        tip = "Try to use the STAR method: Situation, Task, Action, Result."
+        clarity = relevance = depth = 5
+        feedback_tip = "Your answer was received. Try to use the STAR method: Situation, Task, Action, Result."
 
     question.answer_text = answer
-    question.score = score
-    question.feedback = feedback
-    question.tip = tip
+    question.clarity_score = clarity
+    question.relevance_score = relevance
+    question.depth_score = depth
+    question.feedback_tip = feedback_tip
     question.save()
+
+    score = round((clarity + relevance + depth) / 3, 1)
 
     return Response({
         "score": score,
-        "feedback": feedback,
-        "tip": tip,
+        "feedback": feedback_tip,
+        "tip": feedback_tip,
     })
 
 
@@ -424,21 +421,24 @@ def complete_session(request, session_id):
         return Response({"error": "Session not found."}, status=404)
 
     questions = Question.objects.filter(
-        session=session, score__isnull=False).order_by("question_number")
+        session=session,
+        clarity_score__isnull=False
+    ).order_by("question_number")
 
     if not questions.exists():
         return Response({"error": "No answered questions found."}, status=400)
 
-    scores = [q.score for q in questions]
+    scores = [round((q.clarity_score + q.relevance_score +
+                    q.depth_score) / 3, 1) for q in questions]
     overall_score = round(sum(scores) / len(scores), 1)
 
     session_data = [
         {
             "question": q.question_text,
             "answer": q.answer_text,
-            "score": q.score,
-            "feedback": q.feedback,
-            "tip": q.tip,
+            "score": round((q.clarity_score + q.relevance_score + q.depth_score) / 3, 1),
+            "feedback": q.feedback_tip,
+            "tip": q.feedback_tip,
         }
         for q in questions
     ]
