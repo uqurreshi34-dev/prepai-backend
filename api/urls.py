@@ -21,4 +21,5 @@ urlpatterns = [
     path("auth/resend-verification/", views.resend_verification),
     path("admin-stats/", views.admin_stats),
     path("waitlist/", views.join_waitlist),
+    path("auth/microsoft/", views.microsoft_auth),
 ]

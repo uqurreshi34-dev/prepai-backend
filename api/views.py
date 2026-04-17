@@ -12,6 +12,7 @@ from django.utils import timezone
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 import anthropic
+import requests
 
 from .models import (User, PasswordResetToken, Session,
                      Question, EmailVerificationToken,
@@ -708,3 +709,59 @@ def join_waitlist(request):
 
     WaitlistEntry.objects.create(email=email)
     return Response({"message": "You're on the list! We'll be in touch soon."}, status=201)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def microsoft_auth(request):
+    access_token = request.data.get("access_token")
+    if not access_token:
+        return Response({"error": "Access token required."}, status=400)
+
+    try:
+        graph_response = requests.get(
+            "https://graph.microsoft.com/v1.0/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        if graph_response.status_code != 200:
+            return Response({"error": "Invalid Microsoft token."}, status=400)
+
+        profile = graph_response.json()
+        email = profile.get("mail") or profile.get("userPrincipalName", "")
+        name = profile.get("displayName", "")
+
+        if not email:
+            return Response({"error": "Could not retrieve email from Microsoft."}, status=400)
+
+        email = email.lower().strip()
+
+        user, created = User.objects.get_or_create(
+            email=email,
+            defaults={
+                "username": email,
+                "first_name": name.split()[0] if name else "",
+                "last_name": " ".join(name.split()[1:]) if len(name.split()) > 1 else "",
+                "is_email_verified": True,
+            }
+        )
+
+        if not created:
+            if not user.is_email_verified:
+                user.is_email_verified = True
+                user.save()
+
+        tokens = get_tokens_for_user(user)
+        return Response({
+            "access": tokens["access"],
+            "refresh": tokens["refresh"],
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": f"{user.first_name} {user.last_name}".strip() or email,
+                "is_pro": user.is_pro,
+            }
+        })
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
