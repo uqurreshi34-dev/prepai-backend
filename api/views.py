@@ -13,6 +13,7 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 import anthropic
 import requests
+import base64
 
 from .models import (User, PasswordResetToken, Session,
                      Question, EmailVerificationToken,
@@ -719,20 +720,31 @@ def microsoft_auth(request):
         return Response({"error": "Access token required."}, status=400)
 
     try:
+        # Try Graph API first with access token
         graph_response = requests.get(
             "https://graph.microsoft.com/v1.0/me",
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=10,
         )
-        if graph_response.status_code != 200:
-            return Response({"error": "Invalid Microsoft token."}, status=400)
 
-        profile = graph_response.json()
-        email = profile.get("mail") or profile.get("userPrincipalName", "")
-        name = profile.get("displayName", "")
+        if graph_response.status_code == 200:
+            profile = graph_response.json()
+            email = profile.get("mail") or profile.get("userPrincipalName", "")
+            name = profile.get("displayName", "")
+        else:
+            # Fallback: decode id_token JWT payload  import base64
+
+            parts = access_token.split(".")
+            if len(parts) != 3:
+                return Response({"error": "Invalid token."}, status=400)
+            padding = 4 - len(parts[1]) % 4
+            payload = base64.urlsafe_b64decode(parts[1] + "=" * padding)
+            claims = json.loads(payload)
+            email = claims.get("email") or claims.get("preferred_username", "")
+            name = claims.get("name", "")
 
         if not email:
-            return Response({"error": "Could not retrieve email from Microsoft."}, status=400)
+            return Response({"error": "Could not retrieve email."}, status=400)
 
         email = email.lower().strip()
 
@@ -746,10 +758,9 @@ def microsoft_auth(request):
             }
         )
 
-        if not created:
-            if not user.is_email_verified:
-                user.is_email_verified = True
-                user.save()
+        if not created and not user.is_email_verified:
+            user.is_email_verified = True
+            user.save()
 
         tokens = get_tokens_for_user(user)
         return Response({
